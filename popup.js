@@ -21,7 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Obfuscated premium key verification
   // Original: "PREMIUM_SCRAPER_2026" XOR encoded with key 0x5A
-  const OBFUSCATED_KEY = [23, 34, 31, 29, 38, 31, 21, 9, 32, 21, 3, 36, 43, 28, 43, 21, 15, 20, 21, 20];
+  const OBFUSCATED_KEY = [10, 8, 31, 23, 19, 15, 23, 5, 9, 25, 8, 27, 10, 31, 8, 5, 104, 106, 104, 108];
   const XOR_KEY = 0x5A;
   const FREE_LIMIT = 5;
 
