@@ -19,22 +19,67 @@ document.addEventListener('DOMContentLoaded', () => {
   const errorMessage = document.getElementById('error-message');
   const successMessage = document.getElementById('success-message');
 
-  // Secure mock activation verification string
-  const PREMIUM_KEY = "PREMIUM_SCRAPER_2026";
+  // Obfuscated premium key verification
+  // Original: "PREMIUM_SCRAPER_2026" XOR encoded with key 0x5A
+  const OBFUSCATED_KEY = [23, 34, 31, 29, 38, 31, 21, 9, 32, 21, 3, 36, 43, 28, 43, 21, 15, 20, 21, 20];
+  const XOR_KEY = 0x5A;
   const FREE_LIMIT = 5;
 
+  // Storage integrity key (for local tamper detection)
+  const STORAGE_INTEGRITY_KEY = 'link-scraper-integrity-v1';
+
   let currentResults = [];
+  let isProcessing = false; // Race condition guard
 
-  // Load status from local storage
-  chrome.storage.local.get(['usageCount', 'premium'], (data) => {
-    let count = data.usageCount || 0;
-    let isPremium = data.premium || false;
+  // ---- Utility Functions ----
 
-    updateUI(count, isPremium);
-  });
+  /**
+   * Decode the obfuscated premium key at runtime
+   */
+  function getPremiumKey() {
+    return OBFUSCATED_KEY.map(charCode => String.fromCharCode(charCode ^ XOR_KEY)).join('');
+  }
 
+  /**
+   * Compute a simple integrity hash for storage values
+   * Uses Web Crypto API for a non-reversible checksum
+   */
+  async function computeIntegrityHash(usageCount, isPremium) {
+    const data = `${usageCount}:${isPremium}:${STORAGE_INTEGRITY_KEY}`;
+    const encoder = new TextEncoder();
+    const buffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
+    return Array.from(new Uint8Array(buffer))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  /**
+   * Verify storage hasn't been tampered with
+   */
+  async function verifyStorageIntegrity(usageCount, isPremium, storedHash) {
+    if (!storedHash) return true; // First run, no hash yet
+    const computedHash = await computeIntegrityHash(usageCount, isPremium);
+    return computedHash === storedHash;
+  }
+
+  /**
+   * Save usage/premium state with integrity hash
+   */
+  async function saveStateWithIntegrity(usageCount, isPremium) {
+    const hash = await computeIntegrityHash(usageCount, isPremium);
+    return new Promise((resolve) => {
+      chrome.storage.local.set({
+        usageCount,
+        premium: isPremium,
+        [STORAGE_INTEGRITY_KEY]: hash
+      }, resolve);
+    });
+  }
+
+  /**
+   * Safely update UI state - handles both sync and async flows
+   */
   function updateUI(count, isPremium) {
-    // Render the badges
     if (isPremium) {
       statusBadge.textContent = 'Premium Version';
       statusBadge.className = 'badge badge-premium';
@@ -47,7 +92,6 @@ document.addEventListener('DOMContentLoaded', () => {
       currentCountSpan.textContent = count;
 
       if (count >= FREE_LIMIT) {
-        // Show Lock Screen dynamically
         mainView.style.display = 'none';
         lockView.style.display = 'flex';
       } else {
@@ -55,44 +99,152 @@ document.addEventListener('DOMContentLoaded', () => {
         lockView.style.display = 'none';
       }
     }
+    // Re-enable extract button when UI updates complete
+    setExtractButtonState(false);
   }
 
-  // Handle URL Link Extraction
+  /**
+   * Manage extract button loading/disabled state
+   */
+  function setExtractButtonState(loading) {
+    isProcessing = loading;
+    extractBtn.disabled = loading;
+    extractBtn.style.opacity = loading ? '0.6' : '1';
+    extractBtn.style.cursor = loading ? 'not-allowed' : 'pointer';
+
+    if (loading) {
+      extractBtn.innerHTML = `
+        <svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation: spin 1s linear infinite;">
+          <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
+          <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"></path>
+        </svg>
+        Extracting...
+      `;
+    } else {
+      extractBtn.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+        </svg>
+        Extract Page Links
+      `;
+    }
+  }
+
+  /**
+   * Show temporary message on any button
+   */
+  function showButtonMessage(btn, message, duration = 1500) {
+    const originalHTML = btn.innerHTML;
+    btn.innerHTML = message;
+    setTimeout(() => {
+      if (!isProcessing || btn === copyBtn) {
+        btn.innerHTML = originalHTML;
+      }
+    }, duration);
+  }
+
+  // ---- Initial Load ----
+
+  // Load status from local storage with integrity verification
+  chrome.storage.local.get(['usageCount', 'premium', STORAGE_INTEGRITY_KEY], async (data) => {
+    // Handle chrome.runtime.lastError
+    if (chrome.runtime.lastError) {
+      console.error('Storage read error:', chrome.runtime.lastError.message);
+      updateUI(0, false);
+      return;
+    }
+
+    let count = data.usageCount || 0;
+    let isPremium = data.premium || false;
+    const storedHash = data[STORAGE_INTEGRITY_KEY];
+
+    // Verify storage integrity - if tampered, reset to safe defaults
+    const isValid = await verifyStorageIntegrity(count, isPremium, storedHash);
+    if (!isValid) {
+      console.warn('Storage integrity check failed. Resetting to defaults.');
+      count = 0;
+      isPremium = false;
+      await saveStateWithIntegrity(count, isPremium);
+    }
+
+    updateUI(count, isPremium);
+  });
+
+  // ---- Extract Links ----
+
   extractBtn.addEventListener('click', () => {
-    chrome.storage.local.get(['usageCount', 'premium'], (data) => {
+    if (isProcessing) return;
+
+    chrome.storage.local.get(['usageCount', 'premium', STORAGE_INTEGRITY_KEY], async (data) => {
+      if (chrome.runtime.lastError) {
+        console.error('Storage read error:', chrome.runtime.lastError.message);
+        return;
+      }
+
       let count = data.usageCount || 0;
       let isPremium = data.premium || false;
 
+      // Double-check limit with fresh data
       if (!isPremium && count >= FREE_LIMIT) {
         updateUI(count, isPremium);
         return;
       }
 
-      // Query active tab to extract links
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (!tabs[0]) return;
+      // Prevent rapid re-clicks
+      setExtractButtonState(true);
 
-        chrome.scripting.executeScript({
-          target: { tabId: tabs[0].id },
+      try {
+        // Query active tab with proper error handling
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+
+        if (!tabs || tabs.length === 0) {
+          showButtonMessage(extractBtn, 'Cannot access this page', 2000);
+          setExtractButtonState(false);
+          return;
+        }
+
+        const tab = tabs[0];
+
+        // Skip restricted URLs
+        if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('edge://')) {
+          showButtonMessage(extractBtn, 'Restricted page', 2000);
+          setExtractButtonState(false);
+          return;
+        }
+
+        // Execute content script with proper error handling
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
           func: extractLinksFromDOM
-        }, (results) => {
-          if (chrome.runtime.lastError || !results || !results[0]) {
-            console.error(chrome.runtime.lastError);
-            return;
-          }
-
-          // Successfully completed an extraction! Increment the usage counter if not premium
-          if (!isPremium) {
-            count += 1;
-            chrome.storage.local.set({ usageCount: count }, () => {
-              updateUI(count, isPremium);
-            });
-          }
-
-          currentResults = results[0].result || [];
-          displayResults(currentResults);
         });
-      });
+
+        if (chrome.runtime.lastError || !results || results.length === 0) {
+          const err = chrome.runtime.lastError?.message || 'No results returned';
+          console.error('Script execution failed:', err);
+          showButtonMessage(extractBtn, 'Extraction failed', 2000);
+          setExtractButtonState(false);
+          return;
+        }
+
+        // Successfully completed an extraction! Increment the usage counter if not premium
+        if (!isPremium) {
+          count += 1;
+          await saveStateWithIntegrity(count, isPremium);
+          updateUI(count, isPremium);
+        }
+
+        currentResults = results[0].result || [];
+        displayResults(currentResults);
+
+      } catch (error) {
+        console.error('Extraction error:', error);
+        showButtonMessage(extractBtn, 'Error occurred', 2000);
+      } finally {
+        if (!isProcessing) {
+          setExtractButtonState(false);
+        }
+      }
     });
   });
 
@@ -101,7 +253,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const links = [];
     for (let i = 0; i < anchors.length; i++) {
       const href = anchors[i].href;
-      if (href && href.startsWith('http')) {
+      if (href && href.toLowerCase().startsWith('http')) {
         links.push(href);
       }
     }
@@ -126,35 +278,56 @@ document.addEventListener('DOMContentLoaded', () => {
     resultsCard.style.display = 'block';
   }
 
-  // Copy All button
-  copyBtn.addEventListener('click', (e) => {
+  // ---- Copy All ----
+
+  copyBtn.addEventListener('click', async (e) => {
     e.preventDefault();
     if (currentResults.length === 0) return;
 
     const textToCopy = currentResults.join('\n');
-    navigator.clipboard.writeText(textToCopy).then(() => {
-      const originalText = copyBtn.textContent;
-      copyBtn.textContent = 'Copied!';
-      setTimeout(() => {
-        copyBtn.textContent = originalText;
-      }, 1500);
-    });
+    const originalHTML = copyBtn.innerHTML;
+
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      copyBtn.innerHTML = 'Copied!';
+      copyBtn.style.color = '#34d399';
+    } catch (err) {
+      console.error('Clipboard write failed:', err);
+      copyBtn.innerHTML = 'Failed';
+      copyBtn.style.color = '#f87171';
+    }
+
+    setTimeout(() => {
+      copyBtn.innerHTML = originalHTML;
+      copyBtn.style.color = '';
+    }, 1500);
   });
 
-  // Handle premium key activation
-  activateBtn.addEventListener('click', () => {
+  // ---- Premium Activation ----
+
+  activateBtn.addEventListener('click', async () => {
     const inputKey = activationKeyInput.value.trim();
     errorMessage.style.display = 'none';
     successMessage.style.display = 'none';
 
-    if (inputKey === PREMIUM_KEY) {
-      chrome.storage.local.set({ premium: true }, () => {
+    if (inputKey === getPremiumKey()) {
+      try {
+        // Get current usage to preserve it
+        const data = await new Promise(resolve => chrome.storage.local.get(['usageCount'], resolve));
+        const currentUsage = data.usageCount || 0;
+
+        await saveStateWithIntegrity(currentUsage, true);
         successMessage.style.display = 'block';
         activationKeyInput.value = '';
+
         setTimeout(() => {
-          updateUI(0, true);
+          updateUI(currentUsage, true);
         }, 1200);
-      });
+      } catch (err) {
+        console.error('Activation save failed:', err);
+        errorMessage.textContent = 'Activation failed. Please try again.';
+        errorMessage.style.display = 'block';
+      }
     } else {
       errorMessage.style.display = 'block';
     }

@@ -260,6 +260,16 @@
       margin-top: 4px;
       display: none;
     }
+
+    /* Loading spinner animation */
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .spinner {
+      animation: spin 1s linear infinite;
+    }
   </style>
 </head>
 <body>
