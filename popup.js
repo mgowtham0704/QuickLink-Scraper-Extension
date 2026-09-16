@@ -335,6 +335,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Handle checkout portal button
   checkoutBtn.addEventListener('click', () => {
-    chrome.tabs.create({ url: 'https://checkout.example.com/premium-scraper' });
+    chrome.tabs.create({ url: 'https://thequietwishco.lemonsqueezy.com/checkout/buy/1348213b-392b-4eff-bc41-f52ac7dff5c7' });
   });
 });
