@@ -1,0 +1,23 @@
+{
+  "name": "link-scraper-extension",
+  "version": "1.0.0",
+  "description": "A lightweight developer utility that extracts all page links in one click. Built for speed, simplicity, and privacy—no tracking, no bloat.",
+  "main": "popup.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "obfuscate": "node obfuscate.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mgowtham0704/QuickLink-Scraper-Extension.git"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/mgowtham0704/QuickLink-Scraper-Extension/issues"
+  },
+  "homepage": "https://github.com/mgowtham0704/QuickLink-Scraper-Extension#readme",
+  "devDependencies": {
+    "javascript-obfuscator": "^5.7.0"
+  }
+}
